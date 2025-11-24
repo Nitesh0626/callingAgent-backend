@@ -23,93 +23,98 @@ const PORT = process.env.PORT || 8080;
 const API_KEY = process.env.API_KEY; 
 const ORDERS_FILE = path.join(__dirname, 'orders.json');
 
-// Enable CORS for frontend access
 app.use(cors());
+app.use(express.json()); // Enable JSON body parsing for status updates
 
-// --- HELPER: LOGGING WITH COLORS ---
+// --- LOGGING ---
 const LOG_COLORS = {
     reset: "\x1b[0m",
     green: "\x1b[32m",
     yellow: "\x1b[33m",
     blue: "\x1b[34m",
-    red: "\x1b[31m",
+    magenta: "\x1b[35m",
     cyan: "\x1b[36m",
-    magenta: "\x1b[35m"
+    red: "\x1b[31m"
 };
 
 function log(type, message) {
-    if (process.stdout.clearLine) {
-        process.stdout.clearLine();
-        process.stdout.cursorTo(0);
-    }
-    
     const timestamp = new Date().toLocaleTimeString();
     let color = LOG_COLORS.reset;
-    let label = type.toUpperCase();
-
     switch (type) {
         case 'user': color = LOG_COLORS.blue; break;
         case 'agent': color = LOG_COLORS.yellow; break;
         case 'system': color = LOG_COLORS.cyan; break;
-        case 'tool': color = LOG_COLORS.green; break;
-        case 'error': color = LOG_COLORS.red; break;
         case 'order': color = LOG_COLORS.magenta; break;
-        case 'api': color = LOG_COLORS.reset; break;
+        case 'error': color = LOG_COLORS.red; break;
     }
-
-    console.log(`${LOG_COLORS.reset}[${timestamp}] ${color}[${label}] ${message}${LOG_COLORS.reset}`);
+    console.log(`${LOG_COLORS.reset}[${timestamp}] ${color}[${type.toUpperCase()}] ${message}${LOG_COLORS.reset}`);
 }
 
-// --- HELPER: SAVE & READ ORDERS ---
+// --- DATA LAYER ---
 function getSavedOrders() {
     if (fs.existsSync(ORDERS_FILE)) {
         try {
-            const data = fs.readFileSync(ORDERS_FILE, 'utf8');
-            return JSON.parse(data);
-        } catch (e) {
-            log('error', 'Error reading orders file');
-            return [];
-        }
+            return JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8'));
+        } catch (e) { return []; }
     }
     return [];
 }
 
 function saveOrderToFile(order) {
-    let orders = getSavedOrders();
+    const orders = getSavedOrders();
     orders.unshift(order);
     fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
-    log('order', `Order #${order.id} saved to orders.json`);
+    log('order', `New Order #${order.id} saved.`);
 }
 
-// --- SYSTEM PROMPT (Optimized for BakeryGhar) ---
-const SYSTEM_INSTRUCTION = `
-SYSTEM: You are the voice assistant for 'BakeryGhar' (bakeryghar.com).
-VOICE: Female, Indian/Nepali accent. Polite, professional, and efficient.
-GOAL: Take cake and bakery orders over the phone.
+function updateOrderStatus(orderId, status) {
+    const orders = getSavedOrders();
+    const index = orders.findIndex(o => o.id === orderId);
+    if (index !== -1) {
+        orders[index].status = status;
+        fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
+        log('order', `Order #${orderId} updated to ${status}`);
+        return true;
+    }
+    return false;
+}
 
-MENU CONTEXT:
-- Cakes: Black Forest, White Forest, Red Velvet, Chocolate Truffle, Pineapple, Butterscotch.
-- Weights: 1lb, 2lb, 1kg, 2kg.
-- Add-ons: Candles, message on cake.
+// --- PROMPT & TOOLS ---
+const SYSTEM_INSTRUCTION_TEMPLATE = `
+SYSTEM: You are the front-desk voice assistant for 'BakeryGhar'.
+VOICE: Female, Indian/Nepali accent. Warm, energetic, and professional.
+ROLE: efficient order taker. Do not be chatty. Get the details accurately.
 
-CONVERSATION FLOW:
-1. Greet: "Namaste, welcome to BakeryGhar. How can I help you?"
-2. Identify Intent: If ordering, ask for the **Product** and **Flavor**.
-3. Quantity/Size: Always ask "How many pounds or kg?"
-4. Customer Details: Ask Name, Phone, and Delivery Address.
-5. Confirmation: Repeat the full order (Item, Flavor, Weight, Address) before saving.
+CONTEXT: 
+- User Phone Number: {{CALLER_NUMBER}} (Already known, verify only if needed).
+- Current Date: ${new Date().toDateString()}
+
+MENU:
+- Cakes: Black Forest, Red Velvet, Truffle, Pineapple, White Forest.
+- Sizes: 1lb, 2lb, 1kg, 2kg.
+- Pastries: Chocolate, Vanilla, Strawberry.
+
+PROCESS:
+1. Greet: "Namaste! Welcome to BakeryGhar. How can I help you today?"
+2. Order Taking:
+   - Ask for **Product** and **Flavor**.
+   - Ask for **Weight/Size** (Required for cakes).
+   - Ask for **Quantity**.
+3. Logistics (Crucial):
+   - Ask **When do you need this?** (Date and Time).
+   - Ask **Delivery Address**.
+   - Ask **Name**.
+4. Confirmation:
+   - Repeat the order summary: "1kg Black Forest Cake for [Time] at [Address]."
+   - Ask "Is this correct?"
+5. Closing:
+   - If confirmed, save the order.
+   - Say "Order placed! We will send an SMS shortly. Thank you!"
 
 RULES:
-- Speak slowly.
-- Ask one question at a time.
-- If the user speaks Nepali, reply in Nepali.
-- If the user asks for price, say "Prices depend on the design, I will connect you to a manager" and use the transfer tool.
-
-SLOT FILLING (Required):
-- customer_name
-- phone_number
-- address
-- items (Must include: product, flavor, weight)
+- Handle dates intelligently.
+- If the user speaks Nepali, switch to Nepali immediately.
+- If asked for custom designs or prices, transfer to a human agent.
 `;
 
 const tools = [{
@@ -122,6 +127,7 @@ const tools = [{
                 customer_name: { type: "STRING" },
                 phone_number: { type: "STRING" },
                 address: { type: "STRING" },
+                delivery_datetime: { type: "STRING" },
                 items: { 
                     type: "ARRAY", 
                     items: { 
@@ -135,7 +141,7 @@ const tools = [{
                     } 
                 }
             },
-            required: ["customer_name", "phone_number", "address", "items"]
+            required: ["customer_name", "phone_number", "address", "items", "delivery_datetime"]
         }
     }, {
         name: "transfer_to_agent",
@@ -144,27 +150,41 @@ const tools = [{
     }]
 }];
 
-// --- HTTP ROUTES ---
+// --- ROUTES ---
 
-app.get('/', (req, res) => {
-    res.send('BakeryGhar AI Backend is running.');
+app.get('/', (req, res) => res.send('BakeryGhar AI Backend Live'));
+
+app.get('/api/orders', (req, res) => {
+    res.json(getSavedOrders());
 });
 
-// Endpoint for Dashboard to fetch orders
-app.get('/api/orders', (req, res) => {
-    log('api', 'Dashboard fetching orders...');
-    const orders = getSavedOrders();
-    res.json(orders);
+app.post('/api/orders/:id/status', (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body;
+    if (updateOrderStatus(id, status)) {
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ error: "Order not found" });
+    }
 });
 
 // Twilio Webhook
 app.post('/incoming', (req, res) => {
     const host = req.headers.host;
+    // Extract Caller ID (e.g., +977...)
+    const caller = req.body.Caller || "Unknown";
+    
+    // TwiML Strategy:
+    // 1. Say "Namaste..." immediately (0 latency).
+    // 2. Connect to Stream.
+    // 3. Pass Caller ID in the Stream URL parameters.
     const twiml = `
     <Response>
-        <Say voice="alice">Namaste. Connecting to BakeryGhar.</Say>
+        <Say voice="alice" language="en-IN">Namaste! Welcome to Bakery Ghar.</Say>
         <Connect>
-            <Stream url="wss://${host}/media-stream" />
+            <Stream url="wss://${host}/media-stream">
+                <Parameter name="caller" value="${caller}" />
+            </Stream>
         </Connect>
     </Response>
     `;
@@ -172,47 +192,76 @@ app.post('/incoming', (req, res) => {
     res.send(twiml);
 });
 
-// --- WEBSOCKET SERVER ---
+// --- WEBSOCKET ---
 
 wss.on('connection', async (ws) => {
-    log('system', 'Twilio media stream connected');
+    log('system', 'Twilio connected');
     
     let streamSid = null;
     let geminiSession = null;
     let isSessionOpen = false;
+    let callerId = "Unknown";
 
     const ai = new GoogleGenAI({ apiKey: API_KEY });
-    
-    const config = {
-        responseModalities: ["AUDIO"],
-        systemInstruction: SYSTEM_INSTRUCTION,
-        tools: tools,
-        speechConfig: {
-            // 'Kore' is a clear female voice
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
-        },
-    };
 
-    try {
+    // Handle initial Twilio messages to get parameters
+    ws.on('message', async (message) => {
+        const data = JSON.parse(message);
+        
+        if (data.event === 'start') {
+            streamSid = data.start.streamSid;
+            // Retrieve Caller ID passed from TwiML
+            callerId = data.start.customParameters?.caller || "Unknown";
+            log('system', `Call Started from: ${callerId}`);
+            
+            // Initialize Gemini AFTER we have the Caller ID context
+            startGeminiSession();
+        } else if (data.event === 'media' && isSessionOpen && geminiSession) {
+            // Forward Audio
+            const ulawBytes = base64ToUint8(data.media.payload);
+            const pcm8k = decodeUlaw(ulawBytes);
+            const pcm16k = upsample8kTo16k(pcm8k);
+            const base64Pcm16k = uint8ToBase64(new Uint8Array(pcm16k.buffer));
+
+            geminiSession.then(s => s.sendRealtimeInput({
+                media: { mimeType: "audio/pcm;rate=16000", data: base64Pcm16k }
+            }));
+        } else if (data.event === 'stop') {
+            log('system', 'Call Ended');
+            if (geminiSession) geminiSession.then(s => s.close());
+        }
+    });
+
+    async function startGeminiSession() {
+        // Inject Caller ID into System Prompt
+        const dynamicSystemInstruction = SYSTEM_INSTRUCTION_TEMPLATE.replace('{{CALLER_NUMBER}}', callerId);
+
+        const config = {
+            responseModalities: ["AUDIO"],
+            systemInstruction: dynamicSystemInstruction,
+            tools: tools,
+            speechConfig: {
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+            },
+        };
+
         const sessionPromise = ai.live.connect({
             model: 'gemini-2.5-flash-native-audio-preview-09-2025',
             config,
             callbacks: {
                 onopen: () => {
-                    log('system', "Gemini Session Opened");
+                    log('system', "Gemini Connected");
                     isSessionOpen = true;
-                    // Initial greeting to start flow
-                    sessionPromise.then(s => s.sendRealtimeInput([{ text: "Say 'Namaste! Welcome to BakeryGhar.'" }]));
+                    // Send a silent signal or short prompt to wake the model, 
+                    // but rely on TwiML for the main greeting to avoid "double speak"
+                    // Or, ask Gemini to wait for user input.
                 },
                 onmessage: async (msg) => {
+                    // Audio Output
                     if (msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
-                        log('agent', 'Agent speaking...');
                         const base64Pcm24k = msg.serverContent.modelTurn.parts[0].inlineData.data;
                         const pcm24k = new Int16Array(base64ToUint8(base64Pcm24k).buffer);
-                        
-                        // Use the new Weighted Average function
                         const pcm8k = downsample24kTo8k(pcm24k);
-                        
                         const ulaw = encodeUlaw(pcm8k);
                         const payload = uint8ToBase64(ulaw);
 
@@ -225,11 +274,10 @@ wss.on('connection', async (ws) => {
                         }
                     }
                     
+                    // Tool Execution
                     if (msg.toolCall) {
-                        log('system', `Tool call received`);
                         for (const fc of msg.toolCall.functionCalls) {
                             let result = { status: "success" };
-                            
                             if (fc.name === 'create_order') {
                                 const orderId = "ord_" + Date.now();
                                 const newOrder = {
@@ -240,10 +288,7 @@ wss.on('connection', async (ws) => {
                                 };
                                 saveOrderToFile(newOrder);
                                 result = { status: "created", order_id: orderId };
-                            } else if (fc.name === 'transfer_to_agent') {
-                                log('tool', 'Transfer requested: ' + fc.args.reason);
                             }
-
                             sessionPromise.then(s => s.sendToolResponse({
                                 functionResponses: {
                                     id: fc.id,
@@ -253,61 +298,23 @@ wss.on('connection', async (ws) => {
                             }));
                         }
                     }
-
+                    
+                    // Interruption
                     if (msg.serverContent?.interrupted) {
-                        log('system', "Agent interrupted");
-                        if (streamSid) {
-                            ws.send(JSON.stringify({ event: 'clear', streamSid }));
-                        }
+                        log('system', "Interrupted");
+                        if (streamSid) ws.send(JSON.stringify({ event: 'clear', streamSid }));
                     }
                 },
                 onclose: () => {
-                    log('system', "Gemini Session Closed");
                     isSessionOpen = false;
-                    ws.close();
                 },
-                onerror: (e) => {
-                    log('error', "Gemini Error: " + e.message);
-                }
+                onerror: (e) => log('error', e.message)
             }
         });
-
         geminiSession = sessionPromise;
-
-        ws.on('message', (message) => {
-            const data = JSON.parse(message);
-            
-            if (data.event === 'start') {
-                streamSid = data.start.streamSid;
-                log('system', `Stream started: ${streamSid}`);
-            } else if (data.event === 'media') {
-                process.stdout.write('.'); 
-                
-                if (isSessionOpen && geminiSession) {
-                    const ulawBytes = base64ToUint8(data.media.payload);
-                    const pcm8k = decodeUlaw(ulawBytes);
-                    const pcm16k = upsample8kTo16k(pcm8k);
-                    const base64Pcm16k = uint8ToBase64(new Uint8Array(pcm16k.buffer));
-
-                    geminiSession.then(s => s.sendRealtimeInput({
-                        media: {
-                            mimeType: "audio/pcm;rate=16000",
-                            data: base64Pcm16k
-                        }
-                    }));
-                }
-            } else if (data.event === 'stop') {
-                log('system', 'Stream stopped');
-                geminiSession.then(s => s.close());
-            }
-        });
-
-    } catch (err) {
-        log('error', "Connection failed: " + err.message);
-        ws.close();
     }
 });
 
 server.listen(PORT, () => {
-    console.log(`${LOG_COLORS.green}BakeryGhar AI Backend listening on port ${PORT}${LOG_COLORS.reset}`);
+    console.log(`${LOG_COLORS.green}BakeryGhar AI Backend Ready on ${PORT}${LOG_COLORS.reset}`);
 });

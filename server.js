@@ -4,6 +4,7 @@ const http = require('http');
 const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
+const cors = require('cors');
 const { GoogleGenAI } = require('@google/genai');
 const { 
     decodeUlaw, 
@@ -19,8 +20,11 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 8080;
-const API_KEY = process.env.API_KEY; // Must be set in .env
+const API_KEY = process.env.API_KEY; 
 const ORDERS_FILE = path.join(__dirname, 'orders.json');
+
+// Enable CORS for frontend access
+app.use(cors());
 
 // --- HELPER: LOGGING WITH COLORS ---
 const LOG_COLORS = {
@@ -29,11 +33,11 @@ const LOG_COLORS = {
     yellow: "\x1b[33m",
     blue: "\x1b[34m",
     red: "\x1b[31m",
-    cyan: "\x1b[36m"
+    cyan: "\x1b[36m",
+    magenta: "\x1b[35m"
 };
 
 function log(type, message) {
-    // Clear line if we were printing dots
     if (process.stdout.clearLine) {
         process.stdout.clearLine();
         process.stdout.cursorTo(0);
@@ -49,25 +53,31 @@ function log(type, message) {
         case 'system': color = LOG_COLORS.cyan; break;
         case 'tool': color = LOG_COLORS.green; break;
         case 'error': color = LOG_COLORS.red; break;
+        case 'order': color = LOG_COLORS.magenta; break;
     }
 
     console.log(`${LOG_COLORS.reset}[${timestamp}] ${color}[${label}] ${message}${LOG_COLORS.reset}`);
 }
 
-// --- HELPER: SAVE ORDER TO FILE ---
-function saveOrderToFile(order) {
-    let orders = [];
+// --- HELPER: SAVE & READ ORDERS ---
+function getSavedOrders() {
     if (fs.existsSync(ORDERS_FILE)) {
         try {
             const data = fs.readFileSync(ORDERS_FILE, 'utf8');
-            orders = JSON.parse(data);
+            return JSON.parse(data);
         } catch (e) {
-            log('error', 'Could not read orders file, starting new.');
+            log('error', 'Error reading orders file');
+            return [];
         }
     }
-    orders.unshift(order); // Add to top
+    return [];
+}
+
+function saveOrderToFile(order) {
+    let orders = getSavedOrders();
+    orders.unshift(order);
     fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
-    log('tool', `Order #${order.id} saved to orders.json`);
+    log('order', `Order #${order.id} saved to orders.json`);
 }
 
 // --- SYSTEM PROMPT ---
@@ -114,6 +124,12 @@ app.get('/', (req, res) => {
     res.send('BakeCall AI Backend is running.');
 });
 
+// Endpoint for Dashboard to fetch orders
+app.get('/api/orders', (req, res) => {
+    const orders = getSavedOrders();
+    res.json(orders);
+});
+
 // Twilio Webhook
 app.post('/incoming', (req, res) => {
     const host = req.headers.host;
@@ -157,16 +173,18 @@ wss.on('connection', async (ws) => {
                 onopen: () => {
                     log('system', "Gemini Session Opened");
                     isSessionOpen = true;
-                    // SEND INITIAL HELLO to break silence
+                    // Initial greeting to start flow
                     sessionPromise.then(s => s.sendRealtimeInput([{ text: "Say 'Hello! How can I help you order today?'" }]));
                 },
                 onmessage: async (msg) => {
-                    // Audio Output
                     if (msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
                         log('agent', 'Agent speaking...');
                         const base64Pcm24k = msg.serverContent.modelTurn.parts[0].inlineData.data;
                         const pcm24k = new Int16Array(base64ToUint8(base64Pcm24k).buffer);
+                        
+                        // Use the new Weighted Average function
                         const pcm8k = downsample24kTo8k(pcm24k);
+                        
                         const ulaw = encodeUlaw(pcm8k);
                         const payload = uint8ToBase64(ulaw);
 
@@ -179,7 +197,6 @@ wss.on('connection', async (ws) => {
                         }
                     }
                     
-                    // Tool Execution
                     if (msg.toolCall) {
                         log('system', `Tool call received`);
                         for (const fc of msg.toolCall.functionCalls) {
@@ -190,7 +207,8 @@ wss.on('connection', async (ws) => {
                                 const newOrder = {
                                     id: orderId,
                                     ...fc.args,
-                                    created_at: new Date().toISOString()
+                                    created_at: new Date().toISOString(),
+                                    status: 'created'
                                 };
                                 saveOrderToFile(newOrder);
                                 result = { status: "created", order_id: orderId };
@@ -235,7 +253,6 @@ wss.on('connection', async (ws) => {
                 streamSid = data.start.streamSid;
                 log('system', `Stream started: ${streamSid}`);
             } else if (data.event === 'media') {
-                // Visual feedback that audio is coming in (prints dots .....)
                 process.stdout.write('.'); 
                 
                 if (isSessionOpen && geminiSession) {

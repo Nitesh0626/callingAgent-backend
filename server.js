@@ -84,7 +84,8 @@ function saveOrderToFile(order) {
 // --- SYSTEM PROMPT (Optimized for Telephony) ---
 const SYSTEM_INSTRUCTION = `
 SYSTEM: You are BakeCall AI — a short-sentence voice booking assistant for bakeries.
-IMPORTANT: Speak slowly and clearly. Use extremely short sentences (1–6 words max).
+IMPORTANT: Speak slowly and clearly with a polite Indian English accent.
+Use extremely short sentences (1–6 words max) to reduce latency.
 Detect caller language (Nepali or English) from first utterance.
 
 SLOT RULES:
@@ -129,6 +130,7 @@ app.get('/', (req, res) => {
 
 // Endpoint for Dashboard to fetch orders
 app.get('/api/orders', (req, res) => {
+    log('api', 'Dashboard fetching orders...');
     const orders = getSavedOrders();
     res.json(orders);
 });
@@ -164,8 +166,8 @@ wss.on('connection', async (ws) => {
         systemInstruction: SYSTEM_INSTRUCTION,
         tools: tools,
         speechConfig: {
-            // 'Puck' is deeper and more stable for telephone lines
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+            // 'Kore' is a clear female voice
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
         },
     };
 

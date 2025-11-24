@@ -81,24 +81,35 @@ function saveOrderToFile(order) {
     log('order', `Order #${order.id} saved to orders.json`);
 }
 
-// --- SYSTEM PROMPT (Optimized for Telephony) ---
+// --- SYSTEM PROMPT (Optimized for BakeryGhar) ---
 const SYSTEM_INSTRUCTION = `
-SYSTEM: You are BakeCall AI — a short-sentence voice booking assistant for bakeries.
-IMPORTANT: Speak slowly and clearly with a polite Indian English accent.
-Use extremely short sentences (1–6 words max) to reduce latency.
-Detect caller language (Nepali or English) from first utterance.
+SYSTEM: You are the voice assistant for 'BakeryGhar' (bakeryghar.com).
+VOICE: Female, Indian/Nepali accent. Polite, professional, and efficient.
+GOAL: Take cake and bakery orders over the phone.
 
-SLOT RULES:
-- customer_name: required. Ask "May I have your name?"
-- phone_number: required. Ask "Please tell me your phone number."
-- address: required. Ask "Please tell your delivery address."
-- items: optional. Ask "Which cake?" "Size?" "Quantity?"
+MENU CONTEXT:
+- Cakes: Black Forest, White Forest, Red Velvet, Chocolate Truffle, Pineapple, Butterscotch.
+- Weights: 1lb, 2lb, 1kg, 2kg.
+- Add-ons: Candles, message on cake.
 
-ACTION RULES:
-- Wait for user to finish speaking.
-- Confirm all collected facts before saving.
-- If confirmed, call tool:create_order.
-- If user says "agent", call tool:transfer_to_agent.
+CONVERSATION FLOW:
+1. Greet: "Namaste, welcome to BakeryGhar. How can I help you?"
+2. Identify Intent: If ordering, ask for the **Product** and **Flavor**.
+3. Quantity/Size: Always ask "How many pounds or kg?"
+4. Customer Details: Ask Name, Phone, and Delivery Address.
+5. Confirmation: Repeat the full order (Item, Flavor, Weight, Address) before saving.
+
+RULES:
+- Speak slowly.
+- Ask one question at a time.
+- If the user speaks Nepali, reply in Nepali.
+- If the user asks for price, say "Prices depend on the design, I will connect you to a manager" and use the transfer tool.
+
+SLOT FILLING (Required):
+- customer_name
+- phone_number
+- address
+- items (Must include: product, flavor, weight)
 `;
 
 const tools = [{
@@ -111,9 +122,20 @@ const tools = [{
                 customer_name: { type: "STRING" },
                 phone_number: { type: "STRING" },
                 address: { type: "STRING" },
-                items: { type: "ARRAY", items: { type: "OBJECT", properties: { product: { type: "STRING" }, quantity: { type: "NUMBER" } } } }
+                items: { 
+                    type: "ARRAY", 
+                    items: { 
+                        type: "OBJECT", 
+                        properties: { 
+                            product: { type: "STRING" },
+                            flavor: { type: "STRING" },
+                            weight: { type: "STRING" },
+                            quantity: { type: "NUMBER" } 
+                        } 
+                    } 
+                }
             },
-            required: ["customer_name", "phone_number", "address"]
+            required: ["customer_name", "phone_number", "address", "items"]
         }
     }, {
         name: "transfer_to_agent",
@@ -125,7 +147,7 @@ const tools = [{
 // --- HTTP ROUTES ---
 
 app.get('/', (req, res) => {
-    res.send('BakeCall AI Backend is running.');
+    res.send('BakeryGhar AI Backend is running.');
 });
 
 // Endpoint for Dashboard to fetch orders
@@ -140,7 +162,7 @@ app.post('/incoming', (req, res) => {
     const host = req.headers.host;
     const twiml = `
     <Response>
-        <Say>Hello, connecting you to BakeCall.</Say>
+        <Say voice="alice">Namaste. Connecting to BakeryGhar.</Say>
         <Connect>
             <Stream url="wss://${host}/media-stream" />
         </Connect>
@@ -180,7 +202,7 @@ wss.on('connection', async (ws) => {
                     log('system', "Gemini Session Opened");
                     isSessionOpen = true;
                     // Initial greeting to start flow
-                    sessionPromise.then(s => s.sendRealtimeInput([{ text: "Say 'Hello! How can I help you order today?'" }]));
+                    sessionPromise.then(s => s.sendRealtimeInput([{ text: "Say 'Namaste! Welcome to BakeryGhar.'" }]));
                 },
                 onmessage: async (msg) => {
                     if (msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
@@ -287,5 +309,5 @@ wss.on('connection', async (ws) => {
 });
 
 server.listen(PORT, () => {
-    console.log(`${LOG_COLORS.green}BakeCall Backend listening on port ${PORT}${LOG_COLORS.reset}`);
+    console.log(`${LOG_COLORS.green}BakeryGhar AI Backend listening on port ${PORT}${LOG_COLORS.reset}`);
 });

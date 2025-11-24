@@ -83,9 +83,9 @@ function upsample8kTo16k(pcm8k) {
 }
 
 /**
- * CRITICAL FIX: Weighted Average Downsampling
- * Instead of a simple average, we use weights [0.25, 0.5, 0.25]
- * This acts as a low-pass filter, significantly smoothing digital artifacts.
+ * CRITICAL AUDIO FIX: Professional DSP Pipeline
+ * 1. Gain Boost: Multiplies volume by 2.5x to fix "quiet/murmuring" issues.
+ * 2. 3-Tap Low-Pass Filter: [0.2, 0.6, 0.2] weights to smooth aliasing artifacts.
  */
 function downsample24kTo8k(pcm24k) {
     const len = pcm24k.length;
@@ -94,15 +94,21 @@ function downsample24kTo8k(pcm24k) {
     
     for (let i = 0; i < targetLen; i++) {
         const idx = i * 3;
-        // Safety check for array bounds
         if (idx + 2 < len) {
-            const p1 = pcm24k[idx];
-            const p2 = pcm24k[idx + 1];
-            const p3 = pcm24k[idx + 2];
+            // Step 1: Gain Boost (Volume Up)
+            // We multiply by 2.5 to make the AI louder on phone lines
+            let p1 = pcm24k[idx] * 2.5;
+            let p2 = pcm24k[idx + 1] * 2.5;
+            let p3 = pcm24k[idx + 2] * 2.5;
+
+            // Clamp values to 16-bit integer range (-32768 to 32767)
+            p1 = Math.max(-32768, Math.min(32767, p1));
+            p2 = Math.max(-32768, Math.min(32767, p2));
+            p3 = Math.max(-32768, Math.min(32767, p3));
             
-            // Weighted Triangle Filter
-            // Center sample has more weight.
-            result[i] = (p1 * 0.25) + (p2 * 0.5) + (p3 * 0.25);
+            // Step 2: 3-Tap Low-Pass Filter (Anti-Aliasing)
+            // Smooths the transition between samples to remove robotic noise
+            result[i] = (p1 * 0.2) + (p2 * 0.6) + (p3 * 0.2);
         } else {
             result[i] = pcm24k[idx];
         }

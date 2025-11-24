@@ -3,7 +3,6 @@ const ulawToLinear = new Int16Array(256);
 // Lookup table for linear PCM (16-bit) to u-law
 const linearToUlaw = new Uint8Array(65536);
 
-// Initialize tables
 (function initTables() {
   const BIAS = 0x84;
   const CLIP = 8159;
@@ -25,7 +24,6 @@ const linearToUlaw = new Uint8Array(65536);
     if (sample > CLIP) sample = CLIP;
     sample += BIAS;
     let exponent = 0;
-    // Determine exponent (segment)
     if (sample > 0x1F) {
         exponent = 1;
         if (sample > 0x3F) {
@@ -47,17 +45,12 @@ const linearToUlaw = new Uint8Array(65536);
             }
         }
     }
-    
     let mantissa = (sample >> (exponent + 3)) & 0x0F;
     let ulawByte = ~(sign | (exponent << 4) | mantissa);
     linearToUlaw[i + 32768] = ulawByte & 0xFF;
   }
 })();
 
-/**
- * Decodes u-law (8kHz) to Linear PCM (16-bit).
- * Returns Int16Array
- */
 function decodeUlaw(buffer) {
   const len = buffer.length;
   const result = new Int16Array(len);
@@ -67,10 +60,6 @@ function decodeUlaw(buffer) {
   return result;
 }
 
-/**
- * Encodes Linear PCM (16-bit) to u-law (8kHz).
- * Input should be Int16Array.
- */
 function encodeUlaw(buffer) {
   const len = buffer.length;
   const result = new Uint8Array(len);
@@ -81,52 +70,50 @@ function encodeUlaw(buffer) {
   return result;
 }
 
-/**
- * Upsample 8kHz -> 16kHz using Linear Interpolation
- * This creates much smoother audio than simple repetition.
- */
 function upsample8kTo16k(pcm8k) {
     const len = pcm8k.length;
     const result = new Int16Array(len * 2);
     for (let i = 0; i < len; i++) {
         const current = pcm8k[i];
         const next = (i < len - 1) ? pcm8k[i + 1] : current;
-        
-        // Sample 1: The original point
         result[i * 2] = current;
-        // Sample 2: The midpoint (average) between current and next
-        result[i * 2 + 1] = (current + next) * 0.5; // Linear Interpolation
+        result[i * 2 + 1] = (current + next) / 2;
     }
     return result;
 }
 
-// --- CRITICAL AUDIO QUALITY FIX: Averaging Samples ---
-// This function is the fix for the "noisy/robotic" voice.
-// Instead of just taking one sample every three, it averages them.
+/**
+ * CRITICAL FIX: Weighted Average Downsampling
+ * Instead of a simple average, we use weights [0.25, 0.5, 0.25]
+ * This acts as a low-pass filter, significantly smoothing digital artifacts.
+ */
 function downsample24kTo8k(pcm24k) {
     const len = pcm24k.length;
     const targetLen = Math.floor(len / 3);
     const result = new Int16Array(targetLen);
+    
     for (let i = 0; i < targetLen; i++) {
-        const p1 = pcm24k[i * 3];
-        const p2 = pcm24k[i * 3 + 1];
-        const p3 = pcm24k[i * 3 + 2];
-        // Average the 3 samples to create a single, smoother sample
-        result[i] = (p1 + p2 + p3) / 3;
+        const idx = i * 3;
+        // Safety check for array bounds
+        if (idx + 2 < len) {
+            const p1 = pcm24k[idx];
+            const p2 = pcm24k[idx + 1];
+            const p3 = pcm24k[idx + 2];
+            
+            // Weighted Triangle Filter
+            // Center sample has more weight.
+            result[i] = (p1 * 0.25) + (p2 * 0.5) + (p3 * 0.25);
+        } else {
+            result[i] = pcm24k[idx];
+        }
     }
     return result;
 }
 
-/**
- * Helper: Convert Base64 string to Uint8Array (u-law bytes)
- */
 function base64ToUint8(base64) {
     return Buffer.from(base64, 'base64');
 }
 
-/**
- * Helper: Convert Uint8Array (u-law bytes) to Base64 string
- */
 function uint8ToBase64(bytes) {
     return Buffer.from(bytes).toString('base64');
 }

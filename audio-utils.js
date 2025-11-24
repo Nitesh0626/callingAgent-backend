@@ -26,7 +26,6 @@ const linearToUlaw = new Uint8Array(65536);
     sample += BIAS;
     let exponent = 0;
     // Determine exponent (segment)
-    // This is a simplified search; could be optimized
     if (sample > 0x1F) {
         exponent = 1;
         if (sample > 0x3F) {
@@ -76,8 +75,6 @@ function encodeUlaw(buffer) {
   const len = buffer.length;
   const result = new Uint8Array(len);
   for (let i = 0; i < len; i++) {
-    // clamp happens in lookup table access logic (offset 32768)
-    // but just in case, ensure valid 16bit range if coming from float
     let val = buffer[i]; 
     result[i] = linearToUlaw[val + 32768];
   }
@@ -85,15 +82,20 @@ function encodeUlaw(buffer) {
 }
 
 /**
- * Upsample 8kHz -> 16kHz (Simple repetition)
+ * Upsample 8kHz -> 16kHz using Linear Interpolation
+ * This creates much smoother audio than simple repetition.
  */
 function upsample8kTo16k(pcm8k) {
     const len = pcm8k.length;
     const result = new Int16Array(len * 2);
     for (let i = 0; i < len; i++) {
-        const val = pcm8k[i];
-        result[i * 2] = val;
-        result[i * 2 + 1] = val;
+        const current = pcm8k[i];
+        const next = (i < len - 1) ? pcm8k[i + 1] : current;
+        
+        // Sample 1: The original point
+        result[i * 2] = current;
+        // Sample 2: The midpoint (average) between current and next
+        result[i * 2 + 1] = (current + next) * 0.5; // Linear Interpolation
     }
     return result;
 }

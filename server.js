@@ -33,6 +33,12 @@ const LOG_COLORS = {
 };
 
 function log(type, message) {
+    // Clear line if we were printing dots
+    if (process.stdout.clearLine) {
+        process.stdout.clearLine();
+        process.stdout.cursorTo(0);
+    }
+    
     const timestamp = new Date().toLocaleTimeString();
     let color = LOG_COLORS.reset;
     let label = type.toUpperCase();
@@ -229,6 +235,9 @@ wss.on('connection', async (ws) => {
                 streamSid = data.start.streamSid;
                 log('system', `Stream started: ${streamSid}`);
             } else if (data.event === 'media') {
+                // Visual feedback that audio is coming in (prints dots .....)
+                process.stdout.write('.'); 
+                
                 if (isSessionOpen && geminiSession) {
                     const ulawBytes = base64ToUint8(data.media.payload);
                     const pcm8k = decodeUlaw(ulawBytes);

@@ -83,9 +83,9 @@ function upsample8kTo16k(pcm8k) {
 }
 
 /**
- * CRITICAL AUDIO FIX: Professional DSP Pipeline
- * 1. Gain Boost: Multiplies volume by 2.5x to fix "quiet/murmuring" issues.
- * 2. 3-Tap Low-Pass Filter: [0.2, 0.6, 0.2] weights to smooth aliasing artifacts.
+ * CRITICAL AUDIO FIX: Professional DSP Pipeline v3
+ * 1. Gain: Reduced to 1.5x (was 2.5x) to prevent distortion/clipping.
+ * 2. Filter: Triangular Window [0.25, 0.5, 0.25] for smoother audio.
  */
 function downsample24kTo8k(pcm24k) {
     const len = pcm24k.length;
@@ -95,20 +95,19 @@ function downsample24kTo8k(pcm24k) {
     for (let i = 0; i < targetLen; i++) {
         const idx = i * 3;
         if (idx + 2 < len) {
-            // Step 1: Gain Boost (Volume Up)
-            // We multiply by 2.5 to make the AI louder on phone lines
-            let p1 = pcm24k[idx] * 2.5;
-            let p2 = pcm24k[idx + 1] * 2.5;
-            let p3 = pcm24k[idx + 2] * 2.5;
+            // Step 1: Moderate Gain Boost (Volume Up but prevent clipping)
+            let p1 = pcm24k[idx] * 1.5;
+            let p2 = pcm24k[idx + 1] * 1.5;
+            let p3 = pcm24k[idx + 2] * 1.5;
 
-            // Clamp values to 16-bit integer range (-32768 to 32767)
+            // Clamp values strictly to avoid overflow distortion
             p1 = Math.max(-32768, Math.min(32767, p1));
             p2 = Math.max(-32768, Math.min(32767, p2));
             p3 = Math.max(-32768, Math.min(32767, p3));
             
-            // Step 2: 3-Tap Low-Pass Filter (Anti-Aliasing)
-            // Smooths the transition between samples to remove robotic noise
-            result[i] = (p1 * 0.2) + (p2 * 0.6) + (p3 * 0.2);
+            // Step 2: Triangular Window Filter (0.25, 0.5, 0.25)
+            // This is better than the previous sharp filter for voice
+            result[i] = (p1 * 0.25) + (p2 * 0.5) + (p3 * 0.25);
         } else {
             result[i] = pcm24k[idx];
         }

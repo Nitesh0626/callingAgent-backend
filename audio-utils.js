@@ -100,15 +100,19 @@ function upsample8kTo16k(pcm8k) {
     return result;
 }
 
-/**
- * Downsample 24kHz -> 8kHz (Take every 3rd sample)
- */
+// --- CRITICAL AUDIO QUALITY FIX: Averaging Samples ---
+// This function is the fix for the "noisy/robotic" voice.
+// Instead of just taking one sample every three, it averages them.
 function downsample24kTo8k(pcm24k) {
     const len = pcm24k.length;
     const targetLen = Math.floor(len / 3);
     const result = new Int16Array(targetLen);
     for (let i = 0; i < targetLen; i++) {
-        result[i] = pcm24k[i * 3];
+        const p1 = pcm24k[i * 3];
+        const p2 = pcm24k[i * 3 + 1];
+        const p3 = pcm24k[i * 3 + 2];
+        // Average the 3 samples to create a single, smoother sample
+        result[i] = (p1 + p2 + p3) / 3;
     }
     return result;
 }

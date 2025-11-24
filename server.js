@@ -54,6 +54,7 @@ function log(type, message) {
         case 'tool': color = LOG_COLORS.green; break;
         case 'error': color = LOG_COLORS.red; break;
         case 'order': color = LOG_COLORS.magenta; break;
+        case 'api': color = LOG_COLORS.reset; break;
     }
 
     console.log(`${LOG_COLORS.reset}[${timestamp}] ${color}[${label}] ${message}${LOG_COLORS.reset}`);
@@ -80,21 +81,23 @@ function saveOrderToFile(order) {
     log('order', `Order #${order.id} saved to orders.json`);
 }
 
-// --- SYSTEM PROMPT ---
+// --- SYSTEM PROMPT (Optimized for Telephony) ---
 const SYSTEM_INSTRUCTION = `
-SYSTEM: You are BakeCall AI — a short-sentence voice booking assistant for bakeries. Use very short sentences (1–6 words). Detect caller language (Nepali or English) from first utterance and continue in that language. Your primary goal: capture required slots quickly: name, phone, address.
+SYSTEM: You are BakeCall AI — a short-sentence voice booking assistant for bakeries.
+IMPORTANT: Speak slowly and clearly. Use extremely short sentences (1–6 words max).
+Detect caller language (Nepali or English) from first utterance.
 
 SLOT RULES:
 - customer_name: required. Ask "May I have your name?"
 - phone_number: required. Ask "Please tell me your phone number."
 - address: required. Ask "Please tell your delivery address."
-- items: optional. If requested, ask "Which cake?" "Size?" "Quantity?"
+- items: optional. Ask "Which cake?" "Size?" "Quantity?"
 
 ACTION RULES:
+- Wait for user to finish speaking.
 - Confirm all collected facts before saving.
 - If confirmed, call tool:create_order.
 - If user says "agent", call tool:transfer_to_agent.
-- TTS STYLE: Very short sentences, neutral, polite.
 `;
 
 const tools = [{
@@ -161,7 +164,8 @@ wss.on('connection', async (ws) => {
         systemInstruction: SYSTEM_INSTRUCTION,
         tools: tools,
         speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+            // 'Puck' is deeper and more stable for telephone lines
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
         },
     };
 
